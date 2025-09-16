@@ -1,0 +1,21 @@
+state,district,block,year,level_m,stage
+SampleState,SampleDistrict,Block A,2015,12.1,Safe
+SampleState,SampleDistrict,Block A,2016,12.6,Safe
+SampleState,SampleDistrict,Block A,2017,13.2,Semi-critical
+SampleState,SampleDistrict,Block A,2018,13.9,Semi-critical
+SampleState,SampleDistrict,Block A,2019,14.7,Critical
+SampleState,SampleDistrict,Block A,2020,15.5,Critical
+SampleState,SampleDistrict,Block A,2021,16.5,Over-exploited
+SampleState,SampleDistrict,Block A,2022,17.2,Over-exploited
+SampleState,SampleDistrict,Block A,2023,17.9,Over-exploited
+SampleState,SampleDistrict,Block A,2024,18.4,Over-exploited
+SampleState,SampleDistrict,Block B,2015,8.5,Safe
+SampleState,SampleDistrict,Block B,2016,8.6,Safe
+SampleState,SampleDistrict,Block B,2017,8.8,Safe
+SampleState,SampleDistrict,Block B,2018,8.9,Safe
+SampleState,SampleDistrict,Block B,2019,9.1,Safe
+SampleState,SampleDistrict,Block B,2020,9.3,Safe
+SampleState,SampleDistrict,Block B,2021,9.6,Safe
+SampleState,SampleDistrict,Block B,2022,9.7,Safe
+SampleState,SampleDistrict,Block B,2023,9.8,Safe
+SampleState,SampleDistrict,Block B,2024,10.0,Safe

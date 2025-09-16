@@ -1,0 +1,3 @@
+Over-exploited: Annual groundwater extraction exceeds annual recharge; strict regulation and recharge are needed.
+Critical: Extraction is close to recharge; adopt conservation and artificial recharge (check-dams, percolation tanks).
+Safe: Extraction is comfortably below recharge. Monitor and adopt efficient irrigation practices.

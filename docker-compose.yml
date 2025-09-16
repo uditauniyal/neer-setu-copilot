@@ -1,0 +1,15 @@
+version: "3.9"
+services:
+  neersetu:
+    build: .
+    container_name: neersetu
+    ports:
+      - "8000:8000"
+      - "8501:8501"
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-3.5-turbo}
+      EMBED_MODEL: ${EMBED_MODEL:-text-embedding-3-small}
+      API_BASE: "http://127.0.0.1:8000"
+    volumes:
+      - ./storage:/app/storage

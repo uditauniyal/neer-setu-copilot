@@ -1,0 +1,11 @@
+# Virtual environments
+.venv/
+.venv311/
+neer_setu_env/
+
+# API keys and secrets
+.env
+
+# Local storage and database files
+storage/
+*.db
