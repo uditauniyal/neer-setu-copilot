@@ -1,18 +1,16 @@
-# Cloud-safe pins for Python 3.13 (no source builds)
-python-dotenv>=1.0.1
-streamlit>=1.40.0
-requests>=2.31.0
+python-dotenv==1.0.1
+streamlit==1.33.0
+requests==2.31.0
 
-# LangChain & friends (match pydantic >= 2.11)
-pydantic>=2.11.0,<3
-langchain>=0.2.14,<0.2.20
-langchain-openai>=0.1.16,<0.1.20
-langchain-community>=0.2.11,<0.2.20
+pydantic==2.7.1
+langchain==0.2.11
+langchain-openai==0.1.7
+langchain-community==0.2.10
+openai==1.44.0
 
-openai>=1.44.0
-chromadb>=0.5.3,<0.5.6
-tiktoken>=0.7.0
+# chroma that still targets NumPy < 2.0 (no build)
+chromadb==0.5.5
 
-# Wheels exist for py3.13 so we avoid builds
-numpy~=2.1
-pandas>=2.2.3
+tiktoken==0.7.0
+numpy==1.26.4
+pandas==2.2.2
