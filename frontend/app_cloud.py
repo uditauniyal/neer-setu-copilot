@@ -2,32 +2,33 @@
 # Single-process Streamlit app for Cloud (no FastAPI, no embeddings/Chroma).
 # Seeds SQLite once, then imports the shared backend agent and answers queries.
 
-import os
-import re
-import time
-import sqlite3
-import pandas as pd
-import streamlit as st
+import os, sys, re, time, sqlite3, pandas as pd
+
+# --- make project root importable (fix ModuleNotFoundError: backend) ---
+from pathlib import Path
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import streamlit as st  # after sys.path fix
 
 # ------------------ Secrets / ENV ------------------
-# Put OPENAI_API_KEY in Streamlit Cloud → Settings → Secrets
 if "OPENAI_API_KEY" in st.secrets:
     os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
 
-# Disable file watchers (avoid inotify limit on Streamlit Cloud)
+# Disable file watchers (avoid inotify limits)
 os.environ["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] = "none"
 
-# Neutralize proxy envs that can leak to clients
-for _v in ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "OPENAI_PROXY"]:
+# Neutralize proxy envs
+for _v in ["HTTP_PROXY","http_proxy","HTTPS_PROXY","https_proxy","ALL_PROXY","all_proxy","OPENAI_PROXY"]:
     os.environ.pop(_v, None)
 
-# Make sure storage dirs exist
+# ------------------ storage ------------------
 os.makedirs("storage", exist_ok=True)
 
-# ------------------ One-off bootstrap ------------------
 @st.cache_resource(show_spinner=False)
 def bootstrap_resources() -> bool:
-    """Ensure SQLite is seeded (glossary/interventions are handled inside rag_tool)."""
+    # seed SQLite if empty
     db_path = "storage/neersetu.db"
     conn = sqlite3.connect(db_path); cur = conn.cursor()
     cur.execute("""CREATE TABLE IF NOT EXISTS gw_levels(
@@ -65,51 +66,45 @@ def bootstrap_resources() -> bool:
     conn.close()
     return True
 
-bootstrap_resources()  # runs once per server
+bootstrap_resources()
 
-# ------------------ Import agent (uses same storage) ------------------
-from backend.agent import ask_agent  # shared logic (SQLite + keyword RAG)
+# ------------------ import agent (uses SQLite + keyword RAG) ------------------
+from backend.agent import ask_agent
 
 # ------------------ UI helpers ------------------
 def extract_table(md_text: str):
     mtab = re.search(r"Year\s*\|\s*Level\s*\(m\)\s*\n-+\s*\|\s*-+\s*\n(.+?)(?:\n\n|\Z)", md_text, re.S)
-    if not mtab:
-        return None
+    if not mtab: return None
     body = mtab.group(1).strip()
     rows = []
     for line in body.splitlines():
-        if "|" not in line:
-            continue
+        if "|" not in line: continue
         parts = [p.strip() for p in line.split("|")]
         if len(parts) >= 2:
-            try:
-                rows.append((int(parts[0]), float(parts[1])))
-            except:
-                pass
-    if not rows:
-        return None
-    return pd.DataFrame(rows, columns=["Year", "Level (m)"]).sort_values("Year")
+            try: rows.append((int(parts[0]), float(parts[1])))
+            except: pass
+    if not rows: return None
+    return pd.DataFrame(rows, columns=["Year","Level (m)"]).sort_values("Year")
 
 def slope_from_df(df: pd.DataFrame):
-    if df is None or len(df) < 2:
-        return None
+    if df is None or len(df) < 2: return None
     df = df.sort_values("Year")
-    y0, y1 = df["Year"].iloc[0], df["Year"].iloc[-1]
-    v0, v1 = df["Level (m)"].iloc[0], df["Level (m)"].iloc[-1]
-    yrs = max(1, (y1 - y0))
-    return (v1 - v0) / yrs
+    y0,y1 = df["Year"].iloc[0], df["Year"].iloc[-1]
+    v0,v1 = df["Level (m)"].iloc[0], df["Level (m)"].iloc[-1]
+    yrs = max(1,(y1-y0))
+    return (v1-v0)/yrs
 
 def stage_badge(md_text: str):
-    if re.search(r"over[- ]?exploited", md_text, re.I): return "Over-exploited", "crit"
-    if re.search(r"\bcritical\b", md_text, re.I):       return "Critical", "warn"
-    if re.search(r"semi[- ]?critical", md_text, re.I):  return "Semi-critical", "warn"
-    if re.search(r"\bsafe\b", md_text, re.I):           return "Safe", "ok"
+    if re.search(r"over[- ]?exploited", md_text, re.I): return "Over-exploited","crit"
+    if re.search(r"\bcritical\b", md_text, re.I):       return "Critical","warn"
+    if re.search(r"semi[- ]?critical", md_text, re.I):  return "Semi-critical","warn"
+    if re.search(r"\bsafe\b", md_text, re.I):           return "Safe","ok"
     return None, None
 
 # ------------------ UI ------------------
 st.set_page_config(page_title="NeerSetu – Cloud", page_icon="💧", layout="wide")
 st.title("💧 NeerSetu – INGRES AI Copilot (Cloud)")
-st.caption("Single-process Streamlit app (no FastAPI, no embeddings/Chroma).")
+st.caption("Single-process Streamlit app (no FastAPI, no Chroma/embeddings).")
 
 examples = [
     "2015–2024 groundwater trend for Block A?",
@@ -128,7 +123,7 @@ if st.button("Ask"):
         t0 = time.time()
         ans = ask_agent(q)
         t1 = time.time()
-    st.markdown(f"_Latency: {int(1000 * (t1 - t0))} ms_")
+    st.markdown(f"_Latency: {int(1000*(t1-t0))} ms_")
 
     s, cls = stage_badge(ans)
     st.write(f"**Stage:** {s or 'n/a'}")
