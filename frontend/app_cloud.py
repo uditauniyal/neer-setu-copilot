@@ -3,7 +3,6 @@
 # - Seeds SQLite once
 # - Imports your shared backend.agent.ask_agent
 # - Polished UI: header, examples, language selector, history, stage badge, Δ m/yr, table+chart, citations
-
 import os, sys, re, time, sqlite3, pandas as pd
 from pathlib import Path
 
@@ -15,23 +14,19 @@ if str(ROOT) not in sys.path:
 import streamlit as st  # after sys.path fix
 
 # ------------------ Secrets / ENV ------------------
-# Pass key from Streamlit Cloud → Settings → Secrets
 if "OPENAI_API_KEY" in st.secrets:
     os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
 
 # Disable file watchers (avoid inotify limit)
 os.environ["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] = "none"
 
-# Neutralize proxy envs (avoid hidden `proxies` kw surfacing in clients)
-for _v in ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "OPENAI_PROXY"]:
+# Neutralize proxy envs (avoid hidden `proxies` kw)
+for _v in ["HTTP_PROXY","http_proxy","HTTPS_PROXY","https_proxy","ALL_PROXY","all_proxy","OPENAI_PROXY"]:
     os.environ.pop(_v, None)
 
 # ---------- quick sanity: show key status (masked) ----------
-_key = os.getenv("OPENAI_API_KEY", "")
-if not _key:
-    st.set_page_config(page_title="NeerSetu – Cloud", page_icon="💧", layout="wide")
-    st.error("OPENAI_API_KEY is missing. Add it in **Settings → Secrets** and Reboot.")
-    st.stop()
+_key = os.getenv("OPENAI_API_KEY","")
+# (we don't stop the app here; we show a nice banner later if a call fails)
 
 # ------------------ storage ------------------
 os.makedirs("storage", exist_ok=True)
@@ -81,48 +76,41 @@ bootstrap_resources()
 # ------------------ import agent (uses SQLite + keyword RAG + OpenAI client) ------------------
 from backend.agent import ask_agent
 
-# ------------------ UI helpers ------------------
+# ------------------ helpers ------------------
 def extract_table(md_text: str):
     mtab = re.search(r"Year\s*\|\s*Level\s*\(m\)\s*\n-+\s*\|\s*-+\s*\n(.+?)(?:\n\n|\Z)", md_text, re.S)
-    if not mtab:
-        return None
+    if not mtab: return None
     body = mtab.group(1).strip()
     rows = []
     for line in body.splitlines():
-        if "|" not in line:
-            continue
+        if "|" not in line: continue
         parts = [p.strip() for p in line.split("|")]
         if len(parts) >= 2:
-            try:
-                rows.append((int(parts[0]), float(parts[1])))
-            except:
-                pass
-    if not rows:
-        return None
-    return pd.DataFrame(rows, columns=["Year", "Level (m)"]).sort_values("Year")
+            try: rows.append((int(parts[0]), float(parts[1])))
+            except: pass
+    if not rows: return None
+    return pd.DataFrame(rows, columns=["Year","Level (m)"]).sort_values("Year")
 
 def slope_from_df(df: pd.DataFrame):
-    if df is None or len(df) < 2:
-        return None
+    if df is None or len(df) < 2: return None
     df = df.sort_values("Year")
-    y0, y1 = df["Year"].iloc[0], df["Year"].iloc[-1]
-    v0, v1 = df["Level (m)"].iloc[0], df["Level (m)"].iloc[-1]
-    yrs = max(1, (y1 - y0))
-    return (v1 - v0) / yrs
+    y0,y1 = df["Year"].iloc[0], df["Year"].iloc[-1]
+    v0,v1 = df["Level (m)"].iloc[0], df["Level (m)"].iloc[-1]
+    yrs = max(1,(y1-y0))
+    return (v1-v0)/yrs
 
 def extract_citations(md_text: str):
     m = re.search(r"\*\*Citations:\*\*\s*(.+)$", md_text, re.S)
-    if not m:
-        return []
+    if not m: return []
     raw = m.group(1).strip()
     parts = [p.strip() for p in re.split(r"\s*\|\s*", raw)]
     return [p for p in parts if p]
 
 def stage_badge(md_text: str):
-    if re.search(r"over[- ]?exploited", md_text, re.I): return "Over-exploited", "crit"
-    if re.search(r"\bcritical\b", md_text, re.I):       return "Critical", "warn"
-    if re.search(r"semi[- ]?critical", md_text, re.I):  return "Semi-critical", "warn"
-    if re.search(r"\bsafe\b", md_text, re.I):           return "Safe", "ok"
+    if re.search(r"over[- ]?exploited", md_text, re.I): return "Over-exploited","crit"
+    if re.search(r"\bcritical\b", md_text, re.I):       return "Critical","warn"
+    if re.search(r"semi[- ]?critical", md_text, re.I):  return "Semi-critical","warn"
+    if re.search(r"\bsafe\b", md_text, re.I):           return "Safe","ok"
     return None, None
 
 def lang_suffix(selected: str):
@@ -130,6 +118,10 @@ def lang_suffix(selected: str):
     if selected == "English": return " Answer in English."
     if selected == "Hindi (हिन्दी)": return " उत्तर हिन्दी में दें।"
     return ""
+
+def is_error_answer(ans: str) -> bool:
+    s = ans.strip().lower()
+    return s.startswith("**authentication error**") or s.startswith("**openai api error**") or s.startswith("**llm error**")
 
 # ------------------ Style ------------------
 st.set_page_config(page_title="NeerSetu – Cloud", page_icon="💧", layout="wide")
@@ -193,6 +185,12 @@ if "history" not in st.session_state:
     st.session_state["history"] = []  # list of dicts: {q, answer, t_ms}
 
 def render_answer(answer_md: str):
+    # If LLM/auth error, show banner and skip charts/tables
+    if is_error_answer(answer_md):
+        st.error(answer_md.replace("**", ""))
+        st.markdown(answer_md)  # show full message + any citations
+        return
+
     # Stage badge
     stage, stage_class = stage_badge(answer_md)
 
