@@ -1,11 +1,13 @@
 # frontend/app_cloud.py
-# Single-process Streamlit app for Cloud (no FastAPI, no embeddings/Chroma).
-# Seeds SQLite once, then imports the shared backend agent and answers queries.
+# Streamlit Cloud entry — single process (no FastAPI, no embeddings/Chroma).
+# - Seeds SQLite once
+# - Imports your shared backend.agent.ask_agent
+# - Polished UI: header, examples, language selector, history, stage badge, Δ m/yr, table+chart, citations
 
 import os, sys, re, time, sqlite3, pandas as pd
-
-# --- make project root importable (fix ModuleNotFoundError: backend) ---
 from pathlib import Path
+
+# ---------- make project root importable (fix ModuleNotFoundError: backend) ----------
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -13,22 +15,30 @@ if str(ROOT) not in sys.path:
 import streamlit as st  # after sys.path fix
 
 # ------------------ Secrets / ENV ------------------
+# Pass key from Streamlit Cloud → Settings → Secrets
 if "OPENAI_API_KEY" in st.secrets:
     os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
 
-# Disable file watchers (avoid inotify limits)
+# Disable file watchers (avoid inotify limit)
 os.environ["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] = "none"
 
-# Neutralize proxy envs
-for _v in ["HTTP_PROXY","http_proxy","HTTPS_PROXY","https_proxy","ALL_PROXY","all_proxy","OPENAI_PROXY"]:
+# Neutralize proxy envs (avoid hidden `proxies` kw surfacing in clients)
+for _v in ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "OPENAI_PROXY"]:
     os.environ.pop(_v, None)
+
+# ---------- quick sanity: show key status (masked) ----------
+_key = os.getenv("OPENAI_API_KEY", "")
+if not _key:
+    st.set_page_config(page_title="NeerSetu – Cloud", page_icon="💧", layout="wide")
+    st.error("OPENAI_API_KEY is missing. Add it in **Settings → Secrets** and Reboot.")
+    st.stop()
 
 # ------------------ storage ------------------
 os.makedirs("storage", exist_ok=True)
 
 @st.cache_resource(show_spinner=False)
 def bootstrap_resources() -> bool:
-    # seed SQLite if empty
+    """Seed SQLite with sample rows if empty."""
     db_path = "storage/neersetu.db"
     conn = sqlite3.connect(db_path); cur = conn.cursor()
     cur.execute("""CREATE TABLE IF NOT EXISTS gw_levels(
@@ -68,71 +78,171 @@ def bootstrap_resources() -> bool:
 
 bootstrap_resources()
 
-# ------------------ import agent (uses SQLite + keyword RAG) ------------------
+# ------------------ import agent (uses SQLite + keyword RAG + OpenAI client) ------------------
 from backend.agent import ask_agent
 
 # ------------------ UI helpers ------------------
 def extract_table(md_text: str):
     mtab = re.search(r"Year\s*\|\s*Level\s*\(m\)\s*\n-+\s*\|\s*-+\s*\n(.+?)(?:\n\n|\Z)", md_text, re.S)
-    if not mtab: return None
+    if not mtab:
+        return None
     body = mtab.group(1).strip()
     rows = []
     for line in body.splitlines():
-        if "|" not in line: continue
+        if "|" not in line:
+            continue
         parts = [p.strip() for p in line.split("|")]
         if len(parts) >= 2:
-            try: rows.append((int(parts[0]), float(parts[1])))
-            except: pass
-    if not rows: return None
-    return pd.DataFrame(rows, columns=["Year","Level (m)"]).sort_values("Year")
+            try:
+                rows.append((int(parts[0]), float(parts[1])))
+            except:
+                pass
+    if not rows:
+        return None
+    return pd.DataFrame(rows, columns=["Year", "Level (m)"]).sort_values("Year")
 
 def slope_from_df(df: pd.DataFrame):
-    if df is None or len(df) < 2: return None
+    if df is None or len(df) < 2:
+        return None
     df = df.sort_values("Year")
-    y0,y1 = df["Year"].iloc[0], df["Year"].iloc[-1]
-    v0,v1 = df["Level (m)"].iloc[0], df["Level (m)"].iloc[-1]
-    yrs = max(1,(y1-y0))
-    return (v1-v0)/yrs
+    y0, y1 = df["Year"].iloc[0], df["Year"].iloc[-1]
+    v0, v1 = df["Level (m)"].iloc[0], df["Level (m)"].iloc[-1]
+    yrs = max(1, (y1 - y0))
+    return (v1 - v0) / yrs
+
+def extract_citations(md_text: str):
+    m = re.search(r"\*\*Citations:\*\*\s*(.+)$", md_text, re.S)
+    if not m:
+        return []
+    raw = m.group(1).strip()
+    parts = [p.strip() for p in re.split(r"\s*\|\s*", raw)]
+    return [p for p in parts if p]
 
 def stage_badge(md_text: str):
-    if re.search(r"over[- ]?exploited", md_text, re.I): return "Over-exploited","crit"
-    if re.search(r"\bcritical\b", md_text, re.I):       return "Critical","warn"
-    if re.search(r"semi[- ]?critical", md_text, re.I):  return "Semi-critical","warn"
-    if re.search(r"\bsafe\b", md_text, re.I):           return "Safe","ok"
+    if re.search(r"over[- ]?exploited", md_text, re.I): return "Over-exploited", "crit"
+    if re.search(r"\bcritical\b", md_text, re.I):       return "Critical", "warn"
+    if re.search(r"semi[- ]?critical", md_text, re.I):  return "Semi-critical", "warn"
+    if re.search(r"\bsafe\b", md_text, re.I):           return "Safe", "ok"
     return None, None
 
-# ------------------ UI ------------------
-st.set_page_config(page_title="NeerSetu – Cloud", page_icon="💧", layout="wide")
-st.title("💧 NeerSetu – INGRES AI Copilot (Cloud)")
-st.caption("Single-process Streamlit app (no FastAPI, no Chroma/embeddings).")
+def lang_suffix(selected: str):
+    if selected == "Auto": return ""
+    if selected == "English": return " Answer in English."
+    if selected == "Hindi (हिन्दी)": return " उत्तर हिन्दी में दें।"
+    return ""
 
+# ------------------ Style ------------------
+st.set_page_config(page_title="NeerSetu – Cloud", page_icon="💧", layout="wide")
+st.markdown(
+    """
+    <style>
+    .neer-header {font-size: 1.8rem; font-weight: 700; margin-bottom: 0.25rem;}
+    .neer-sub   {color:#64748b; margin-bottom: 1rem;}
+    .badge {display:inline-block;padding:.25rem .5rem;border-radius:12px;font-size:.75rem;margin-right:.25rem;background:#e2f2ff;color:#0369a1;border:1px solid #bae6fd;}
+    .ok    {background:#ecfdf5;border-color:#d1fae5;color:#065f46;}
+    .warn  {background:#fff7ed;border-color:#ffedd5;color:#9a3412;}
+    .crit  {background:#fef2f2;border-color:#fee2e2;color:#991b1b;}
+    .small-note{color:#64748b;font-size:.85rem}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ------------------ Sidebar ------------------
+with st.sidebar:
+    st.markdown("### ⚙️ Settings")
+    lang = st.radio("Answer language", ["Auto", "English", "Hindi (हिन्दी)"], index=0)
+    st.markdown("---")
+    st.markdown("### ℹ️ About")
+    st.markdown(
+        "- **Project:** NeerSetu – INGRES AI Copilot  \n"
+        "- **PS:** SIH25066 (MoJS)  \n"
+        "- **Stack:** Streamlit (Cloud) · OpenAI client · SQLite · Keyword RAG"
+    )
+    st.markdown("---")
+    if st.button("🧽 Clear session"):
+        st.session_state.clear()
+        st.rerun()
+
+# ------------------ Header ------------------
+st.markdown(f"<div class='neer-header'>💧 NeerSetu – INGRES AI Copilot (Cloud)</div>", unsafe_allow_html=True)
+st.markdown(f"<div class='neer-sub'>Ask groundwater questions (trends, stage, interventions) in Hindi/English.</div>", unsafe_allow_html=True)
+st.markdown("<span class='badge'>PS: SIH25066</span> <span class='badge'>Text-only MVP</span>", unsafe_allow_html=True)
+st.markdown("")
+
+# ------------------ Example Chips ------------------
 examples = [
     "2015–2024 groundwater trend for Block A?",
     "Stage of extraction for Block B in 2022?",
     "Compare 2019 vs 2024 groundwater level for Block A.",
     "What does over-exploited mean and what should we do?",
 ]
-ex_cols = st.columns(len(examples))
+st.write("**Examples:**")
+cols = st.columns(len(examples))
 for i, ex in enumerate(examples):
-    if ex_cols[i].button(ex, key=f"ex_{i}"):
-        st.session_state["q"] = ex
+    if cols[i].button(ex, key=f"ex_{i}"):
+        st.session_state["prefill"] = ex
 
-q = st.text_input("Ask a question (Hi/En)", value=st.session_state.get("q", "2015–2024 groundwater trend for Block A?"))
-if st.button("Ask"):
-    with st.spinner("Thinking..."):
-        t0 = time.time()
-        ans = ask_agent(q)
-        t1 = time.time()
-    st.markdown(f"_Latency: {int(1000*(t1-t0))} ms_")
+# ------------------ Input ------------------
+default_q = st.session_state.get("prefill", "2015–2024 groundwater trend for Block A?")
+q = st.text_area("Your question", value=default_q, placeholder="e.g., 2015–2024 groundwater trend for Block A?")
+go = st.button("Ask", type="primary")
 
-    s, cls = stage_badge(ans)
-    st.write(f"**Stage:** {s or 'n/a'}")
+# ------------------ Chat History ------------------
+if "history" not in st.session_state:
+    st.session_state["history"] = []  # list of dicts: {q, answer, t_ms}
 
-    df = extract_table(ans)
-    if df is not None:
-        sl = slope_from_df(df)
-        st.metric("Δ (m/yr)", f"{sl:+.2f}" if sl is not None else "—")
+def render_answer(answer_md: str):
+    # Stage badge
+    stage, stage_class = stage_badge(answer_md)
+
+    # Parse tiny table & compute Δ
+    df = extract_table(answer_md)
+    slope = slope_from_df(df)
+
+    # Metrics/top row
+    mcol = st.columns(3)
+    mcol[0].metric("LLM Compose", "OK", delta=None)
+    mcol[1].metric("Δ (m/yr)", f"{slope:+.2f}" if slope is not None else "—")
+    if stage:
+        mcol[2].markdown(f"<div class='badge {stage_class}'>{stage}</div>", unsafe_allow_html=True)
+    else:
+        mcol[2].markdown(f"<div class='badge'>Stage: n/a</div>", unsafe_allow_html=True)
+
+    # Parsed table + chart
+    if df is not None and not df.empty:
+        st.markdown("**Last years (parsed)**")
         st.dataframe(df, use_container_width=True, hide_index=True)
         st.line_chart(df.set_index("Year")["Level (m)"])
 
-    st.markdown(ans)
+    # Raw answer
+    st.markdown("**Answer**")
+    st.markdown(answer_md)
+
+    # Citations
+    cites = extract_citations(answer_md)
+    if cites:
+        with st.expander("Citations", expanded=False):
+            for c in cites:
+                st.write("• " + c)
+
+if go and q.strip():
+    user_q = q.strip() + lang_suffix(lang)
+    with st.spinner("Consulting tools and composing answer..."):
+        t0 = time.time()
+        ans = ask_agent(user_q)
+        t1 = time.time()
+    st.session_state["history"].append({"q": q.strip(), "answer": ans, "t_ms": int(1000 * (t1 - t0))})
+
+# ------------------ Render history ------------------
+if st.session_state["history"]:
+    st.markdown("### History")
+    for i, item in enumerate(reversed(st.session_state["history"])):
+        with st.container(border=True):
+            st.markdown(
+                f"**Q:** {item['q']}  \n<span class='small-note'>Latency: {item['t_ms']} ms</span>",
+                unsafe_allow_html=True,
+            )
+            render_answer(item["answer"])
+else:
+    st.info("Ask a question or click an example to get started.")

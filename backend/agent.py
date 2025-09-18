@@ -1,27 +1,39 @@
 # backend/agent.py
 """
 NeerSetu – INGRES AI Copilot (cloud-safe, no ChatOpenAI)
-- Uses OpenAI Python client directly (no hidden `proxies` kw)
-- Tool-first (SQLite + keyword RAG) → LLM compose
+- Uses OpenAI Python client directly (avoids hidden 'proxies' kw)
+- Tool-first: SQLite (trend/stage) + keyword RAG
 - Compare path ("2019 vs 2024"), robust block parsing
-- Strips mid-body 'Source:' lines; uses footer Citations
+- Strips mid-body 'Source:' lines and appends a Citations footer
 """
 
 import os, re
 from dotenv import load_dotenv
 load_dotenv()
 
-# ---- neutralize any proxy envs before client creation ----
+# Neutralize proxies (some platforms inject these; they break clients)
 for _v in ["HTTP_PROXY","http_proxy","HTTPS_PROXY","https_proxy","ALL_PROXY","all_proxy","OPENAI_PROXY"]:
     os.environ.pop(_v, None)
 
 from openai import OpenAI
+from openai import AuthenticationError, APIStatusError
 from backend.tools.sql_tool import get_trend, get_stage, get_level
 from backend.tools.rag_tool import rag_store
 
-# ---------------- OpenAI client (no proxies path) ----------------
+# ---------------- OpenAI client (no proxies kw) ----------------
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
+_api_key = os.getenv("OPENAI_API_KEY", "")
+
+# build kwargs only if env vars present
+_client_kwargs = {}
+if os.getenv("OPENAI_BASE_URL"):
+    _client_kwargs["base_url"] = os.getenv("OPENAI_BASE_URL")
+if os.getenv("OPENAI_ORG_ID"):
+    _client_kwargs["organization"] = os.getenv("OPENAI_ORG_ID")
+if os.getenv("OPENAI_PROJECT"):
+    _client_kwargs["project"] = os.getenv("OPENAI_PROJECT")
+
+client = OpenAI(api_key=_api_key, **_client_kwargs)
 
 SYSTEM = """You are NeerSetu, an INGRES groundwater copilot.
 - Use tools (SQL/RAG) for facts before answering.
@@ -63,22 +75,32 @@ def _strip_spurious_body_sources(txt: str) -> str:
     m = _FOOTER_RX.search(txt)
     if m: body, footer = txt[:m.start()], txt[m.start():]
     else: body, footer = txt, ""
-    # drop any body 'Citations:' or 'Source:' lines
     body = re.sub(r"(?im)^\s*(?:[-*]\s*)?Citations\s*:\s*.*(?:\n(?!\S)|$)", "", body)
     body = re.sub(r"(?im)^\s*(?:[-*]\s*)?(?:Source|Sources)\s*:\s*.*(?:\n(?!\S)|$)", "", body)
     body = re.sub(r"\n{3,}", "\n\n", body).strip()
     return (body + ("\n\n" + footer if footer else "")).strip()
 
 def _compose_llm(system: str, user: str) -> str:
-    resp = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[
-            {"role":"system", "content": system},
-            {"role":"user",   "content": user},
-        ],
-        temperature=0,
-    )
-    return resp.choices[0].message.content.strip()
+    try:
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role":"system", "content": system},
+                {"role":"user",   "content": user},
+            ],
+            temperature=0,
+            timeout=30,
+        )
+        return resp.choices[0].message.content.strip()
+    except AuthenticationError:
+        # Friendly message instead of redacted stack
+        return ("**Authentication error**: Missing/invalid OPENAI_API_KEY. "
+                "Set it in Streamlit → Settings → Secrets. "
+                "If using Azure/base_url, also set OPENAI_BASE_URL / OPENAI_ORG_ID / OPENAI_PROJECT.")
+    except APIStatusError as e:
+        return f"**OpenAI API error** ({e.status_code}): please retry."
+    except Exception as e:
+        return f"**LLM error**: {e}"
 
 def ask_agent(query: str) -> str:
     intent = _detect_intent(query)
