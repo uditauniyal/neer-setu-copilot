@@ -1,8 +1,13 @@
 # frontend/app_cloud.py
 # Single-process Streamlit app for Cloud (no FastAPI). Seeds SQLite/Chroma once,
 # then imports the shared backend agent and answers queries.
-
+# frontend/app_cloud.py (very top)
 import os
+# Disable file watchers in Streamlit (belt-and-suspenders with config.toml)
+os.environ["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] = "none"
+
+
+
 import re
 import time
 import sqlite3

@@ -1,0 +1,8 @@
+# .streamlit/config.toml
+[server]
+headless = true
+fileWatcherType = "none"   # <— disable filesystem watchers (fixes inotify limit)
+runOnSave = false
+
+[browser]
+gatherUsageStats = false
