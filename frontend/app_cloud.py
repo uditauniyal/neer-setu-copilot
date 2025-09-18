@@ -1,6 +1,6 @@
 # frontend/app_cloud.py
-# Single-process Streamlit app for Cloud (no FastAPI). Seeds SQLite/Chroma once,
-# then imports the shared backend agent and answers queries.
+# Single-process Streamlit app for Cloud (no FastAPI, no embeddings/Chroma).
+# Seeds SQLite once, then imports the shared backend agent and answers queries.
 
 import os
 import re
@@ -17,19 +17,17 @@ if "OPENAI_API_KEY" in st.secrets:
 # Disable file watchers (avoid inotify limit on Streamlit Cloud)
 os.environ["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] = "none"
 
-# Neutralize proxy envs that might bleed into clients
+# Neutralize proxy envs that can leak to clients
 for _v in ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "OPENAI_PROXY"]:
     os.environ.pop(_v, None)
 
 # Make sure storage dirs exist
 os.makedirs("storage", exist_ok=True)
-os.makedirs("storage/chroma", exist_ok=True)
 
 # ------------------ One-off bootstrap ------------------
 @st.cache_resource(show_spinner=False)
 def bootstrap_resources() -> bool:
-    """Ensure SQLite is seeded and Chroma has docs (glossary/interventions)."""
-    # 1) seed SQLite if empty
+    """Ensure SQLite is seeded (glossary/interventions are handled inside rag_tool)."""
     db_path = "storage/neersetu.db"
     conn = sqlite3.connect(db_path); cur = conn.cursor()
     cur.execute("""CREATE TABLE IF NOT EXISTS gw_levels(
@@ -65,44 +63,12 @@ def bootstrap_resources() -> bool:
                            VALUES(?,?,?,?,?,?)""", rows)
         conn.commit()
     conn.close()
-
-    # 2) build Chroma vector store if empty (use local FastEmbed embeddings)
-    from langchain_community.embeddings import FastEmbedEmbeddings
-    from langchain_community.vectorstores import Chroma
-
-    DOCS = {
-        "glossary.txt": (
-            "Over-exploited: Annual groundwater extraction exceeds annual recharge; strict regulation and "
-            "recharge are needed.\n"
-            "Critical: Extraction close to recharge; adopt conservation and artificial recharge "
-            "(check-dams, percolation tanks).\n"
-            "Safe: Extraction comfortably below recharge. Monitor and use efficient irrigation practices."
-        ),
-        "interventions.txt": (
-            "Interventions:\n"
-            "- Check-dams and percolation tanks in upper catchments.\n"
-            "- Roof-top rainwater harvesting in settlements and public buildings.\n"
-            "- Water budgeting at panchayat level; crop planning to reduce water stress.\n"
-            "Citations: CGWB GWRA-2022; Master Plan for Artificial Recharge 2020."
-        ),
-    }
-
-    emb = FastEmbedEmbeddings()  # local, small, no API/proxy issues
-    vs = Chroma(persist_directory="storage/chroma", embedding_function=emb)
-    try:
-        existing = vs._collection.count() if hasattr(vs._collection, "count") else 0
-    except Exception:
-        existing = 0
-    if existing == 0:
-        texts = list(DOCS.values())
-        metas = [{"source": k} for k in DOCS.keys()]
-        Chroma.from_texts(texts, metadatas=metas, embedding=emb, persist_directory="storage/chroma").persist()
     return True
 
 bootstrap_resources()  # runs once per server
 
 # ------------------ Import agent (uses same storage) ------------------
-from backend.agent import ask_agent  # shared logic, uses SQLite+Chroma
+from backend.agent import ask_agent  # shared logic (SQLite + keyword RAG)
 
 # ------------------ UI helpers ------------------
 def extract_table(md_text: str):
@@ -143,7 +109,7 @@ def stage_badge(md_text: str):
 # ------------------ UI ------------------
 st.set_page_config(page_title="NeerSetu – Cloud", page_icon="💧", layout="wide")
 st.title("💧 NeerSetu – INGRES AI Copilot (Cloud)")
-st.caption("Single-process Streamlit app (no FastAPI).")
+st.caption("Single-process Streamlit app (no FastAPI, no embeddings/Chroma).")
 
 examples = [
     "2015–2024 groundwater trend for Block A?",
@@ -164,11 +130,9 @@ if st.button("Ask"):
         t1 = time.time()
     st.markdown(f"_Latency: {int(1000 * (t1 - t0))} ms_")
 
-    # Stage badge
     s, cls = stage_badge(ans)
     st.write(f"**Stage:** {s or 'n/a'}")
 
-    # Table + chart + Δ
     df = extract_table(ans)
     if df is not None:
         sl = slope_from_df(df)
@@ -176,5 +140,4 @@ if st.button("Ask"):
         st.dataframe(df, use_container_width=True, hide_index=True)
         st.line_chart(df.set_index("Year")["Level (m)"])
 
-    # Raw answer
     st.markdown(ans)
