@@ -1,11 +1,10 @@
 # backend/agent.py
 """
-NeerSetu – INGRES AI Copilot (cloud-safe)
+NeerSetu – INGRES AI Copilot (cloud-safe, no ChatOpenAI)
+- Uses OpenAI Python client directly (no hidden `proxies` kw)
 - Tool-first (SQLite + keyword RAG) → LLM compose
-- Compare path ("2019 vs 2024")
-- Robust block parsing
+- Compare path ("2019 vs 2024"), robust block parsing
 - Strips mid-body 'Source:' lines; uses footer Citations
-- ChatOpenAI constructed with openai_proxy=None (fixes proxies kw crash)
 """
 
 import os, re
@@ -16,19 +15,13 @@ load_dotenv()
 for _v in ["HTTP_PROXY","http_proxy","HTTPS_PROXY","https_proxy","ALL_PROXY","all_proxy","OPENAI_PROXY"]:
     os.environ.pop(_v, None)
 
-from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate
+from openai import OpenAI
 from backend.tools.sql_tool import get_trend, get_stage, get_level
 from backend.tools.rag_tool import rag_store
 
-# ---------------- LLM ----------------
-LLM = ChatOpenAI(
-    model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
-    temperature=0,
-    openai_api_key=os.getenv("OPENAI_API_KEY", ""),
-    openai_proxy=None,            # <-- critical: disable proxy param path
-    timeout=30,
-)
+# ---------------- OpenAI client (no proxies path) ----------------
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
 
 SYSTEM = """You are NeerSetu, an INGRES groundwater copilot.
 - Use tools (SQL/RAG) for facts before answering.
@@ -39,7 +32,6 @@ SYSTEM = """You are NeerSetu, an INGRES groundwater copilot.
 - Format: brief bullets + tiny table (if trend/comparison) + citations at end.
 - If data is missing, say 'insufficient data' and suggest next steps.
 """
-PROMPT = ChatPromptTemplate.from_messages([("system", SYSTEM), ("human", "{msg}")])
 
 _FOOTER_RX = re.compile(r"\*\*Citations:\*\*", re.I)
 
@@ -71,12 +63,22 @@ def _strip_spurious_body_sources(txt: str) -> str:
     m = _FOOTER_RX.search(txt)
     if m: body, footer = txt[:m.start()], txt[m.start():]
     else: body, footer = txt, ""
-    body = re.sub(
-        r"(?im)^\s*(?:[-*]\s*)?Citations\s*:\s*\n(?:[ \t]*[-*].*\n|[ \t]*\S.*\n)*?(?=\n\S|$)",
-        "", body)
+    # drop any body 'Citations:' or 'Source:' lines
+    body = re.sub(r"(?im)^\s*(?:[-*]\s*)?Citations\s*:\s*.*(?:\n(?!\S)|$)", "", body)
     body = re.sub(r"(?im)^\s*(?:[-*]\s*)?(?:Source|Sources)\s*:\s*.*(?:\n(?!\S)|$)", "", body)
     body = re.sub(r"\n{3,}", "\n\n", body).strip()
     return (body + ("\n\n" + footer if footer else "")).strip()
+
+def _compose_llm(system: str, user: str) -> str:
+    resp = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[
+            {"role":"system", "content": system},
+            {"role":"user",   "content": user},
+        ],
+        temperature=0,
+    )
+    return resp.choices[0].message.content.strip()
 
 def ask_agent(query: str) -> str:
     intent = _detect_intent(query)
@@ -143,9 +145,7 @@ def ask_agent(query: str) -> str:
         "Compose a grounded answer. Do NOT include any 'Citations:' or 'Source:' "
         "lines in the body; the system will append the Citations footer."
     )
-    messages = PROMPT.format_messages(msg=user_block)
-    resp = LLM.invoke(messages)
-    answer = resp.content.strip()
+    answer = _compose_llm(SYSTEM, user_block)
 
     # Clean & ensure table present
     answer = _strip_spurious_body_sources(answer)
