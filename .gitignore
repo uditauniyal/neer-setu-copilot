@@ -1,11 +1,23 @@
 # Virtual environments
 .venv/
+.venv-3.11/
 .venv311/
 neer_setu_env/
+env/
+venv/
+
+# IDE files (e.g., VS Code)
+.vscode/
+.idea/
 
 # API keys and secrets
 .env
+.env.sample
 
-# Local storage and database files
+# Local storage and databases
 storage/
 *.db
+
+# Python-specific files
+__pycache__/
+*.pyc
