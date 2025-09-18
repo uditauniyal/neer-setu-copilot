@@ -1,10 +1,22 @@
 # frontend/app_cloud.py
-import os, re, time, sqlite3, pandas as pd, streamlit as st
+# Single-process Streamlit app for Cloud (no FastAPI). Seeds SQLite/Chroma once,
+# then imports the shared backend agent and answers queries.
+
+import os
+import re
+import time
+import sqlite3
+import pandas as pd
+import streamlit as st
 
 # ------------------ Secrets / ENV ------------------
-# Put OPENAI_API_KEY in Streamlit Cloud -> Settings -> Secrets
+# Put OPENAI_API_KEY in Streamlit Cloud → Settings → Secrets
 if "OPENAI_API_KEY" in st.secrets:
     os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
+
+# Neutralize proxy envs that can break OpenAI client via unsupported 'proxies' kw
+for _v in ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "OPENAI_PROXY"]:
+    os.environ.pop(_v, None)
 
 # Make sure storage dirs exist
 os.makedirs("storage", exist_ok=True)
@@ -12,7 +24,7 @@ os.makedirs("storage/chroma", exist_ok=True)
 
 # ------------------ One-off bootstrap ------------------
 @st.cache_resource(show_spinner=False)
-def bootstrap_resources():
+def bootstrap_resources() -> bool:
     """Ensure SQLite is seeded and Chroma has docs (glossary/interventions)."""
     # 1) seed SQLite if empty
     db_path = "storage/neersetu.db"
@@ -24,7 +36,6 @@ def bootstrap_resources():
     );""")
     cnt = cur.execute("SELECT COUNT(*) FROM gw_levels").fetchone()[0]
     if cnt == 0:
-        # minimal seed identical to local sample_levels.csv
         rows = [
             ("SampleState","SampleDistrict","Block A",2015,12.1,"Safe"),
             ("SampleState","SampleDistrict","Block A",2016,12.6,"Safe"),
@@ -52,25 +63,37 @@ def bootstrap_resources():
         conn.commit()
     conn.close()
 
-    # 2) build vector store if empty (use same code path as backend)
+    # 2) build vector store if empty
     from langchain_openai import OpenAIEmbeddings
     from langchain_community.vectorstores import Chroma
 
-    # tiny corpus in-code to avoid extra files on cloud
     DOCS = {
-        "glossary.txt": """Over-exploited: Annual groundwater extraction exceeds annual recharge; strict regulation and recharge are needed.
-Critical: Extraction close to recharge; adopt conservation and artificial recharge (check-dams, percolation tanks).
-Safe: Extraction comfortably below recharge. Monitor and use efficient irrigation practices.""",
-        "interventions.txt": """Interventions:
-- Check-dams and percolation tanks in upper catchments.
-- Roof-top rainwater harvesting in settlements and public buildings.
-- Water budgeting at panchayat level; crop planning to reduce water stress.
-Citations: CGWB GWRA-2022; Master Plan for Artificial Recharge 2020."""
+        "glossary.txt": (
+            "Over-exploited: Annual groundwater extraction exceeds annual recharge; strict regulation and "
+            "recharge are needed.\n"
+            "Critical: Extraction close to recharge; adopt conservation and artificial recharge "
+            "(check-dams, percolation tanks).\n"
+            "Safe: Extraction comfortably below recharge. Monitor and use efficient irrigation practices."
+        ),
+        "interventions.txt": (
+            "Interventions:\n"
+            "- Check-dams and percolation tanks in upper catchments.\n"
+            "- Roof-top rainwater harvesting in settlements and public buildings.\n"
+            "- Water budgeting at panchayat level; crop planning to reduce water stress.\n"
+            "Citations: CGWB GWRA-2022; Master Plan for Artificial Recharge 2020."
+        ),
     }
-    # if no collection (light check), (re)create
-    emb = OpenAIEmbeddings(model=os.getenv("EMBED_MODEL","text-embedding-3-small"))
+
+    emb = OpenAIEmbeddings(
+        model=os.getenv("EMBED_MODEL", "text-embedding-3-small"),
+        openai_api_key=os.getenv("OPENAI_API_KEY", ""),
+        openai_proxy=None,
+    )
     vs = Chroma(persist_directory="storage/chroma", embedding_function=emb)
-    existing = vs._collection.count() if hasattr(vs._collection, "count") else 0
+    try:
+        existing = vs._collection.count() if hasattr(vs._collection, "count") else 0
+    except Exception:
+        existing = 0
     if existing == 0:
         texts = list(DOCS.values())
         metas = [{"source": k} for k in DOCS.keys()]
@@ -80,8 +103,8 @@ Citations: CGWB GWRA-2022; Master Plan for Artificial Recharge 2020."""
 bootstrap_resources()  # runs once per server
 
 # ------------------ Import agent (uses same storage) ------------------
-# We reuse your local backend agent directly
-from backend.agent import ask_agent  # noqa: E402  (import after bootstrap)
+# Reuse your backend agent directly (ensures consistent grounding and formatting)
+from backend.agent import ask_agent  # noqa: E402
 
 # ------------------ UI helpers ------------------
 def extract_table(md_text: str):
@@ -91,29 +114,33 @@ def extract_table(md_text: str):
     body = mtab.group(1).strip()
     rows = []
     for line in body.splitlines():
-        if "|" not in line: continue
+        if "|" not in line:
+            continue
         parts = [p.strip() for p in line.split("|")]
         if len(parts) >= 2:
             try:
                 rows.append((int(parts[0]), float(parts[1])))
-            except: pass
-    if not rows: return None
-    return pd.DataFrame(rows, columns=["Year","Level (m)"]).sort_values("Year")
+            except:
+                pass
+    if not rows:
+        return None
+    return pd.DataFrame(rows, columns=["Year", "Level (m)"]).sort_values("Year")
 
 def slope_from_df(df: pd.DataFrame):
-    if df is None or len(df)<2: return None
+    if df is None or len(df) < 2:
+        return None
     df = df.sort_values("Year")
-    y0,y1 = df["Year"].iloc[0], df["Year"].iloc[-1]
-    v0,v1 = df["Level (m)"].iloc[0], df["Level (m)"].iloc[-1]
-    yrs = max(1,(y1-y0))
-    return (v1-v0)/yrs
+    y0, y1 = df["Year"].iloc[0], df["Year"].iloc[-1]
+    v0, v1 = df["Level (m)"].iloc[0], df["Level (m)"].iloc[-1]
+    yrs = max(1, (y1 - y0))
+    return (v1 - v0) / yrs
 
 def stage_badge(md_text: str):
-    if re.search(r"over[- ]?exploited", md_text, re.I): return "Over-exploited","crit"
-    if re.search(r"\bcritical\b", md_text, re.I):       return "Critical","warn"
-    if re.search(r"semi[- ]?critical", md_text, re.I):  return "Semi-critical","warn"
-    if re.search(r"\bsafe\b", md_text, re.I):           return "Safe","ok"
-    return None,None
+    if re.search(r"over[- ]?exploited", md_text, re.I): return "Over-exploited", "crit"
+    if re.search(r"\bcritical\b", md_text, re.I):       return "Critical", "warn"
+    if re.search(r"semi[- ]?critical", md_text, re.I):  return "Semi-critical", "warn"
+    if re.search(r"\bsafe\b", md_text, re.I):           return "Safe", "ok"
+    return None, None
 
 # ------------------ UI ------------------
 st.set_page_config(page_title="NeerSetu – Cloud", page_icon="💧", layout="wide")
@@ -126,28 +153,30 @@ examples = [
     "Compare 2019 vs 2024 groundwater level for Block A.",
     "What does over-exploited mean and what should we do?",
 ]
-
 ex_cols = st.columns(len(examples))
 for i, ex in enumerate(examples):
     if ex_cols[i].button(ex, key=f"ex_{i}"):
         st.session_state["q"] = ex
 
-q = st.text_input("Ask a question (Hi/En)", value=st.session_state.get("q","2015–2024 groundwater trend for Block A?"))
+q = st.text_input("Ask a question (Hi/En)", value=st.session_state.get("q", "2015–2024 groundwater trend for Block A?"))
 if st.button("Ask"):
     with st.spinner("Thinking..."):
-        t0=time.time()
+        t0 = time.time()
         ans = ask_agent(q)
-        t1=time.time()
-    st.markdown(f"_Latency: {int(1000*(t1-t0))} ms_")
-    # Top badges
-    st.markdown("**LLM Compose:** OK")
-    s,cls = stage_badge(ans); st.write(f"**Stage:** {s or 'n/a'}")
-    # Table + chart
+        t1 = time.time()
+    st.markdown(f"_Latency: {int(1000 * (t1 - t0))} ms_")
+
+    # Stage badge
+    s, cls = stage_badge(ans)
+    st.write(f"**Stage:** {s or 'n/a'}")
+
+    # Table + chart + Δ
     df = extract_table(ans)
     if df is not None:
         sl = slope_from_df(df)
         st.metric("Δ (m/yr)", f"{sl:+.2f}" if sl is not None else "—")
         st.dataframe(df, use_container_width=True, hide_index=True)
         st.line_chart(df.set_index("Year")["Level (m)"])
-    # Raw
+
+    # Raw answer
     st.markdown(ans)
