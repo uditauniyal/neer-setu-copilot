@@ -121,7 +121,12 @@ def lang_suffix(selected: str):
 
 def is_error_answer(ans: str) -> bool:
     s = ans.strip().lower()
-    return s.startswith("**authentication error**") or s.startswith("**openai api error**") or s.startswith("**llm error**")
+    return (
+        "authentication error" in s or
+        "openai api error" in s or
+        "llm error" in s
+    )
+
 
 # ------------------ Style ------------------
 st.set_page_config(page_title="NeerSetu – Cloud", page_icon="💧", layout="wide")

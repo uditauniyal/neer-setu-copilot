@@ -80,6 +80,7 @@ def _strip_spurious_body_sources(txt: str) -> str:
     body = re.sub(r"\n{3,}", "\n\n", body).strip()
     return (body + ("\n\n" + footer if footer else "")).strip()
 
+# ---- helpers (unchanged above) ----
 def _compose_llm(system: str, user: str) -> str:
     try:
         resp = client.chat.completions.create(
@@ -93,14 +94,21 @@ def _compose_llm(system: str, user: str) -> str:
         )
         return resp.choices[0].message.content.strip()
     except AuthenticationError:
-        # Friendly message instead of redacted stack
-        return ("**Authentication error**: Missing/invalid OPENAI_API_KEY. "
+        return ("Authentication error: Missing/invalid OPENAI_API_KEY. "
                 "Set it in Streamlit → Settings → Secrets. "
                 "If using Azure/base_url, also set OPENAI_BASE_URL / OPENAI_ORG_ID / OPENAI_PROJECT.")
     except APIStatusError as e:
-        return f"**OpenAI API error** ({e.status_code}): please retry."
+        return f"OpenAI API error ({e.status_code}): please retry."
     except Exception as e:
-        return f"**LLM error**: {e}"
+        return f"LLM error: {e}"
+
+def _looks_like_error(text: str) -> bool:
+    s = text.strip().lower()
+    return (
+        s.startswith("authentication error") or
+        s.startswith("openai api error") or
+        s.startswith("llm error")
+    )
 
 def ask_agent(query: str) -> str:
     intent = _detect_intent(query)
@@ -108,9 +116,9 @@ def ask_agent(query: str) -> str:
     years  = [int(y) for y in re.findall(r"(20\d{2})", query)]
 
     tool_outputs, citations = [], []
-    forced_table_md = ""
+    forced_table_md = ""   # tiny table for slope/chart ONLY on success
 
-    # TREND
+    # -------- tools (trend / stage / compare) --------
     if intent == "trend" and len(years) >= 2:
         sy, ey = years[0], years[1]
         out = get_trend(block, sy, ey)
@@ -124,7 +132,6 @@ def ask_agent(query: str) -> str:
         else:
             tool_outputs.append(out["msg"])
 
-    # STAGE LOOKUP
     elif intent == "stage_lookup" and len(years) >= 1:
         y = years[0]
         out = get_stage(block, y)
@@ -134,7 +141,6 @@ def ask_agent(query: str) -> str:
         else:
             tool_outputs.append(out["msg"])
 
-    # COMPARE
     elif intent == "compare" and len(years) >= 2:
         y1, y2 = years[0], years[1]
         v1, v2 = get_level(block, y1), get_level(block, y2)
@@ -151,7 +157,7 @@ def ask_agent(query: str) -> str:
         if not (v1.get("ok") or v2.get("ok")):
             tool_outputs.append("insufficient data for requested years.")
 
-    # RAG grounding (keyword retriever)
+    # RAG (keyword)
     try:
         rag_hits = rag_store.search(query, k=3)
     except Exception as e:
@@ -160,7 +166,7 @@ def ask_agent(query: str) -> str:
         tool_outputs.append("Policy:\n" + "\n".join(f"- {d['text']} (source: {d['source']})" for d in rag_hits))
         citations.extend(f"Doc: {d['source']}" for d in rag_hits)
 
-    # Compose
+    # -------- compose --------
     context = "\n\n".join(tool_outputs) if tool_outputs else "No tool output."
     user_block = (
         f"User: {query}\n\nContext from tools:\n{context}\n\n"
@@ -168,6 +174,10 @@ def ask_agent(query: str) -> str:
         "lines in the body; the system will append the Citations footer."
     )
     answer = _compose_llm(SYSTEM, user_block)
+
+    # If the LLM failed, return the error AS-IS (no tiny table/citations)
+    if _looks_like_error(answer):
+        return answer
 
     # Clean & ensure table present
     answer = _strip_spurious_body_sources(answer)
