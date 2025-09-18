@@ -100,11 +100,22 @@ def extract_citations(md_text: str):
     return [p for p in parts if p]
 
 def stage_badge(md_text: str):
-    if re.search(r"over[- ]?exploited", md_text, re.I): return "Over-exploited","crit"
-    if re.search(r"\bcritical\b", md_text, re.I):       return "Critical","warn"
-    if re.search(r"semi[- ]?critical", md_text, re.I):  return "Semi-critical","warn"
-    if re.search(r"\bsafe\b", md_text, re.I):           return "Safe","ok"
+    # 1) Prefer explicit lines the agent emits
+    m = re.search(r"Stage for .*?:\s*(Safe|Semi-?critical|Critical|Over-?exploited)", md_text, re.I)
+    if not m:
+        m = re.search(r"latest stage\s*(Safe|Semi-?critical|Critical|Over-?exploited)", md_text, re.I)
+    if m:
+        stage = m.group(1).lower().replace("semi critical", "semi-critical").replace("over exploited", "over-exploited")
+        cls = {"safe":"ok","semi-critical":"warn","critical":"warn","over-exploited":"crit"}[stage]
+        return stage.title(), cls
+
+    # 2) Fallback (ordered to avoid false hits from policy text)
+    if re.search(r"\bsafe\b", md_text, re.I):            return "Safe", "ok"
+    if re.search(r"semi[- ]?critical", md_text, re.I):   return "Semi-critical", "warn"
+    if re.search(r"\bcritical\b", md_text, re.I):        return "Critical", "warn"
+    if re.search(r"over[- ]?exploited", md_text, re.I):  return "Over-exploited", "crit"
     return None, None
+
 
 def lang_suffix(selected: str):
     if selected == "Auto": return ""
