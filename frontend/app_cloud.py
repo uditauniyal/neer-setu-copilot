@@ -1,39 +1,32 @@
 # frontend/app_cloud.py
 # Streamlit Cloud entry — single process (no FastAPI, no embeddings/Chroma).
 # - Seeds SQLite once
-# - Imports your shared backend.agent.ask_agent
-# - Polished UI: header, examples, language selector, history, stage badge, Δ m/yr, table+chart, citations
+# - Imports backend.agent.ask_agent (which now has a local fallback when LLM fails)
+# - Polished UI + Diagnostics panel to verify OPENAI_API_KEY on cloud
+
 import os, sys, re, time, sqlite3, pandas as pd
 from pathlib import Path
 
-# ---------- make project root importable (fix ModuleNotFoundError: backend) ----------
+# ---------- make project root importable ----------
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import streamlit as st  # after sys.path fix
+import streamlit as st
 
-# ------------------ Secrets / ENV ------------------
+# ------------------ ENV/Secrets ------------------
 if "OPENAI_API_KEY" in st.secrets:
     os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
 
-# Disable file watchers (avoid inotify limit)
 os.environ["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] = "none"
-
-# Neutralize proxy envs (avoid hidden `proxies` kw)
 for _v in ["HTTP_PROXY","http_proxy","HTTPS_PROXY","https_proxy","ALL_PROXY","all_proxy","OPENAI_PROXY"]:
     os.environ.pop(_v, None)
-
-# ---------- quick sanity: show key status (masked) ----------
-_key = os.getenv("OPENAI_API_KEY","")
-# (we don't stop the app here; we show a nice banner later if a call fails)
 
 # ------------------ storage ------------------
 os.makedirs("storage", exist_ok=True)
 
 @st.cache_resource(show_spinner=False)
 def bootstrap_resources() -> bool:
-    """Seed SQLite with sample rows if empty."""
     db_path = "storage/neersetu.db"
     conn = sqlite3.connect(db_path); cur = conn.cursor()
     cur.execute("""CREATE TABLE IF NOT EXISTS gw_levels(
@@ -73,7 +66,7 @@ def bootstrap_resources() -> bool:
 
 bootstrap_resources()
 
-# ------------------ import agent (uses SQLite + keyword RAG + OpenAI client) ------------------
+# ------------------ import agent (has local fallback if key missing) ------------------
 from backend.agent import ask_agent
 
 # ------------------ helpers ------------------
@@ -121,12 +114,7 @@ def lang_suffix(selected: str):
 
 def is_error_answer(ans: str) -> bool:
     s = ans.strip().lower()
-    return (
-        "authentication error" in s or
-        "openai api error" in s or
-        "llm error" in s
-    )
-
+    return ("authentication error" in s) or ("openai api error" in s) or ("llm error" in s)
 
 # ------------------ Style ------------------
 st.set_page_config(page_title="NeerSetu – Cloud", page_icon="💧", layout="wide")
@@ -140,15 +128,23 @@ st.markdown(
     .warn  {background:#fff7ed;border-color:#ffedd5;color:#9a3412;}
     .crit  {background:#fef2f2;border-color:#fee2e2;color:#991b1b;}
     .small-note{color:#64748b;font-size:.85rem}
+    .error-card{background:#ffe8e8;padding:1rem;border-radius:.5rem;border:1px solid #fecaca;}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# ------------------ Sidebar ------------------
+# ------------------ Sidebar (with Diagnostics) ------------------
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
     lang = st.radio("Answer language", ["Auto", "English", "Hindi (हिन्दी)"], index=0)
+    st.markdown("---")
+    st.markdown("### 🔎 Diagnostics")
+    masked = (os.getenv("OPENAI_API_KEY","")[:4] + "…" + os.getenv("OPENAI_API_KEY","")[-4:]) if os.getenv("OPENAI_API_KEY") else "None"
+    st.caption(f"OPENAI_API_KEY: **{masked}**")
+    if st.button("Clear server cache"):
+        st.cache_resource.clear()
+        st.success("Server cache cleared. Click Rerun.")
     st.markdown("---")
     st.markdown("### ℹ️ About")
     st.markdown(
@@ -156,10 +152,6 @@ with st.sidebar:
         "- **PS:** SIH25066 (MoJS)  \n"
         "- **Stack:** Streamlit (Cloud) · OpenAI client · SQLite · Keyword RAG"
     )
-    st.markdown("---")
-    if st.button("🧽 Clear session"):
-        st.session_state.clear()
-        st.rerun()
 
 # ------------------ Header ------------------
 st.markdown(f"<div class='neer-header'>💧 NeerSetu – INGRES AI Copilot (Cloud)</div>", unsafe_allow_html=True)
@@ -185,15 +177,13 @@ default_q = st.session_state.get("prefill", "2015–2024 groundwater trend for B
 q = st.text_area("Your question", value=default_q, placeholder="e.g., 2015–2024 groundwater trend for Block A?")
 go = st.button("Ask", type="primary")
 
-# ------------------ Chat History ------------------
+# ------------------ Chat history ------------------
 if "history" not in st.session_state:
     st.session_state["history"] = []  # list of dicts: {q, answer, t_ms}
 
 def render_answer(answer_md: str):
-    # If LLM/auth error, show banner and skip charts/tables
     if is_error_answer(answer_md):
-        st.error(answer_md.replace("**", ""))
-        st.markdown(answer_md)  # show full message + any citations
+        st.markdown(f"<div class='error-card'>{answer_md}</div>", unsafe_allow_html=True)
         return
 
     # Stage badge
@@ -233,7 +223,7 @@ if go and q.strip():
     user_q = q.strip() + lang_suffix(lang)
     with st.spinner("Consulting tools and composing answer..."):
         t0 = time.time()
-        ans = ask_agent(user_q)
+        ans = ask_agent(user_q)  # uses LLM if key is valid, else local fallback
         t1 = time.time()
     st.session_state["history"].append({"q": q.strip(), "answer": ans, "t_ms": int(1000 * (t1 - t0))})
 
