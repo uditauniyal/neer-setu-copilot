@@ -1,6 +1,8 @@
 python-dotenv==1.0.1
 streamlit==1.33.0
 requests==2.31.0
+fastembed==0.3.0
+
 
 # LangChain family compatible with pydantic >= 2.7,<2.12 on py3.11
 pydantic==2.7.1

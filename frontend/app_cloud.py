@@ -1,13 +1,8 @@
 # frontend/app_cloud.py
 # Single-process Streamlit app for Cloud (no FastAPI). Seeds SQLite/Chroma once,
 # then imports the shared backend agent and answers queries.
-# frontend/app_cloud.py (very top)
+
 import os
-# Disable file watchers in Streamlit (belt-and-suspenders with config.toml)
-os.environ["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] = "none"
-
-
-
 import re
 import time
 import sqlite3
@@ -19,7 +14,10 @@ import streamlit as st
 if "OPENAI_API_KEY" in st.secrets:
     os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
 
-# Neutralize proxy envs that can break OpenAI client via unsupported 'proxies' kw
+# Disable file watchers (avoid inotify limit on Streamlit Cloud)
+os.environ["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] = "none"
+
+# Neutralize proxy envs that might bleed into clients
 for _v in ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "OPENAI_PROXY"]:
     os.environ.pop(_v, None)
 
@@ -68,8 +66,8 @@ def bootstrap_resources() -> bool:
         conn.commit()
     conn.close()
 
-    # 2) build vector store if empty
-    from langchain_openai import OpenAIEmbeddings
+    # 2) build Chroma vector store if empty (use local FastEmbed embeddings)
+    from langchain_community.embeddings import FastEmbedEmbeddings
     from langchain_community.vectorstores import Chroma
 
     DOCS = {
@@ -89,11 +87,7 @@ def bootstrap_resources() -> bool:
         ),
     }
 
-    emb = OpenAIEmbeddings(
-        model=os.getenv("EMBED_MODEL", "text-embedding-3-small"),
-        openai_api_key=os.getenv("OPENAI_API_KEY", ""),
-        openai_proxy=None,
-    )
+    emb = FastEmbedEmbeddings()  # local, small, no API/proxy issues
     vs = Chroma(persist_directory="storage/chroma", embedding_function=emb)
     try:
         existing = vs._collection.count() if hasattr(vs._collection, "count") else 0
@@ -108,8 +102,7 @@ def bootstrap_resources() -> bool:
 bootstrap_resources()  # runs once per server
 
 # ------------------ Import agent (uses same storage) ------------------
-# Reuse your backend agent directly (ensures consistent grounding and formatting)
-from backend.agent import ask_agent  # noqa: E402
+from backend.agent import ask_agent  # shared logic, uses SQLite+Chroma
 
 # ------------------ UI helpers ------------------
 def extract_table(md_text: str):

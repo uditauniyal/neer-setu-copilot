@@ -1,32 +1,27 @@
 # backend/tools/rag_tool.py
 import os
 from dotenv import load_dotenv
-
 load_dotenv()
 
-# Neutralize proxy envs that can pass unsupported 'proxies' to OpenAI client
+# Neutralize proxy envs that can trip client internals
 for _v in ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "OPENAI_PROXY"]:
     os.environ.pop(_v, None)
 
-from langchain_openai import OpenAIEmbeddings
+from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_community.vectorstores import Chroma
 
 
 class RAGStore:
     def __init__(self, persist_dir: str = "storage/chroma"):
-        self.emb = OpenAIEmbeddings(
-            model=os.getenv("EMBED_MODEL", "text-embedding-3-small"),
-            openai_api_key=os.getenv("OPENAI_API_KEY", ""),
-            openai_proxy=None,
-        )
+        # Local, lightweight embeddings (no API key / proxies)
+        self.emb = FastEmbedEmbeddings()
         self.vs = Chroma(persist_directory=persist_dir, embedding_function=self.emb)
 
-    # Preferred by backend.agent (returns structured hits)
     def search(self, query: str, k: int = 3):
         docs = self.vs.similarity_search(query, k=k)
         return [{"text": d.page_content.strip(), "source": d.metadata.get("source", "doc")} for d in docs]
 
-    # Backward-compatible (not used by current agent, but safe to keep)
+    # Backward-compatible helper (unused by final agent but safe to keep)
     def search_policy(self, query: str, k: int = 3) -> str:
         docs = self.vs.similarity_search(query, k=k)
         if not docs:
