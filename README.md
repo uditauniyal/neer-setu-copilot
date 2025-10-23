@@ -50,6 +50,8 @@ It bridges **complex hydrogeological data** and **human understanding** by combi
 
 ### 🪶 Mermaid Architecture Diagram
 
+🪶 **Mermaid Architecture Diagram**
+
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#e8eaff', 'edgeLabelBackground':'#ffffff', 'fontSize': '14px'}}}%%
 flowchart TD
@@ -67,6 +69,9 @@ flowchart TD
     BE -->|Sends prompt/query| AI
     AI -->|Returns insight/summary| BE
     BE -->|Handles caching, config, and local fallback| UT
+```
+
+---
 
 
 
