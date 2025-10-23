@@ -51,15 +51,24 @@ It bridges **complex hydrogeological data** and **human understanding** by combi
 ### 🪶 Mermaid Architecture Diagram
 
 ```mermaid
-graph TD
-    A[User Interface - Streamlit App] -->|Query or Upload Data| B[Backend Logic - Python Engine]
-    B -->|Preprocess input data| C[Data Layer - SQLite / CSV / APIs]
-    B -->|Sends prompt/query| D[AI Model - OpenAI API]
-    D -->|Returns insight/summary| B
-    B -->|Displays structured output| A
-    B -->|Handles caching, config, and local fallback| E[Utilities & Config]
-    A -->|Interactive Visualization| F[Charts / Tables / Reports]
-```
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#e8eaff', 'edgeLabelBackground':'#ffffff', 'fontSize': '14px'}}}%%
+flowchart TD
+    title["**Architecture Overview**"]
+    UI[User Interface - Streamlit App]
+    BE[Backend Logic - Python Engine]
+    DL[Data Layer - SQLite / CSV / APIs]
+    AI[AI Model - OpenAI API]
+    UT[Utilities & Config]
+    CH[Charts / Tables / Reports]
+
+    UI -->|Query or Upload Data| BE
+    BE -->|Displays structured output| UI
+    UI -->|Interactive Visualization| CH
+    BE -->|Preprocess input data| DL
+    BE -->|Sends prompt/query| AI
+    AI -->|Returns insight/summary| BE
+    BE -->|Handles caching, config, and local fallback| UT
+
 
 ---
 
