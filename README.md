@@ -53,7 +53,6 @@ It bridges **complex hydrogeological data** and **human understanding** by combi
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#e8eaff', 'edgeLabelBackground':'#ffffff', 'fontSize': '14px'}}}%%
 flowchart TD
-    title["**Architecture Overview**"]
     UI[User Interface - Streamlit App]
     BE[Backend Logic - Python Engine]
     DL[Data Layer - SQLite / CSV / APIs]
@@ -70,7 +69,6 @@ flowchart TD
     BE -->|Handles caching, config, and local fallback| UT
 
 
----
 
 ## 🔁 Request Flow (≈10 seconds end-to-end)
 
